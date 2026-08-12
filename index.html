@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>전선 공성 디펜스 프로토타입 v0.2</title>
+<style>
+:root{--bg:#0f141c;--panel:#192231;--text:#edf4ff;--muted:#9eacbf;--ally:#65d7ef;--enemy:#ff7685;--gold:#ffd166}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+#app{width:min(100vw,500px);margin:0 auto;padding:10px 10px 18px}
+h1{font-size:17px;margin:0 0 4px}.sub{font-size:11px;color:var(--muted);margin-bottom:8px}
+.top{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;margin-bottom:7px}
+.phase{background:var(--panel);padding:8px 10px;border-radius:10px;font-size:12px;font-weight:800}
+.clock{font-size:13px;font-weight:800;font-variant-numeric:tabular-nums}
+canvas{width:100%;display:block;aspect-ratio:9/14;background:#182230;border:1px solid #304057;border-radius:14px;touch-action:none}
+.row{display:flex;gap:6px;margin-top:8px}
+button{border:0;border-radius:9px;padding:9px 8px;background:#26344a;color:white;font-weight:750;font-size:12px}
+button.primary{background:#2e7dd1}.grow{flex:1}.warn{background:#88414a}
+.panel{background:var(--panel);border-radius:11px;padding:8px;margin-top:8px}
+.panel h2{font-size:12px;margin:0 0 6px}
+.small{font-size:10px;color:var(--muted);line-height:1.45}
+.heroes{display:grid;gap:5px}
+.hero{display:grid;grid-template-columns:24px 1fr auto auto;gap:5px;align-items:center;background:#121925;border-radius:8px;padding:6px}
+.num{width:24px;height:24px;border-radius:7px;background:#2b3a50;display:grid;place-items:center;font-size:11px;font-weight:800}
+.hero b{font-size:11px}.hero small{display:block;font-size:9px;color:var(--muted);margin-top:1px}
+.hero button{padding:5px 7px;font-size:10px}
+.log{height:72px;overflow:auto;background:#0d131b;border-radius:8px;padding:6px;font-size:9px;line-height:1.45;color:#c6d0de}
+.overlay{position:fixed;inset:0;background:rgba(5,8,13,.76);display:none;align-items:center;justify-content:center;padding:18px;z-index:20}
+.modal{width:min(430px,100%);background:#202b3d;border:1px solid #3b4b64;border-radius:15px;padding:13px}
+.modal h3{margin:0 0 5px;font-size:15px}.modal p{margin:0 0 9px;font-size:10px;color:var(--muted)}
+.choices{display:grid;gap:7px}.choice{text-align:left;background:#141d2a;border:1px solid #34445b}
+.choices b{display:block;font-size:11px}.choices small{font-size:9px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>전선 공성 디펜스 v0.2</h1>
+  <div class="sub">방어 → 1차 방어탑 → 반격 → 2차 방어탑 → 성문 → 최종 보스</div>
+
+  <div class="top">
+    <div class="phase" id="phaseText">PHASE 1 · 방어선 유지</div>
+    <div class="clock" id="clock">00:00</div>
+  </div>
+
+  <canvas id="cv" width="450" height="700"></canvas>
+
+  <div class="row">
+    <button id="start" class="primary grow">시작</button>
+    <button id="pause">일시정지</button>
+    <button id="speed">1×</button>
+    <button id="reset" class="warn">리셋</button>
+  </div>
+
+  <div class="panel">
+    <h2>전술 순환</h2>
+    <div id="heroes" class="heroes"></div>
+    <div class="small">전투 전에 순서를 바꿔 결과를 비교해보세요. 기본공격은 자동, 핵심 전술 스킬만 순서대로 발동합니다.</div>
+  </div>
+
+  <div class="panel">
+    <h2>전투 로그</h2>
+    <div id="log" class="log"></div>
+  </div>
+</div>
+
+<div id="overlay" class="overlay">
+  <div class="modal">
+    <h3>전투 중 강화 선택</h3>
+    <p>이번 전투 동안 영구 적용됩니다.</p>
+    <div class="choices">
+      <button class="choice" data-up="army"><b>병력 집중 훈련</b><small>아군 병력 공격 +20%, 최대 HP +18%</small></button>
+      <button class="choice" data-up="siege"><b>공성 특화</b><small>적 타워/성문 피해 +35%, 전술 폭격 피해 +20%</small></button>
+      <button class="choice" data-up="support"><b>전술 지원 강화</b><small>버프·회복·CC 효과 +25%, 전술 순환 속도 +12%</small></button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+var c=document.getElementById('cv'),g=c.getContext('2d'),W=c.width,H=c.height,laneX=W/2;
+var C={ally:'#65d7ef',enemy:'#ff7685',gold:'#ffd166',road:'#1b2736',text:'#eef5ff',
+ sword:'#f1c36b',archer:'#7ed38c',cavalry:'#aa8eff',spear:'#78a7ff',boss:'#ffb454'};
+var TYPES=[
+ {n:'검',hp:100,atk:18,spd:31,range:20,cd:.78},
+ {n:'궁',hp:68,atk:17,spd:26,range:84,cd:.92},
+ {n:'기',hp:84,atk:21,spd:47,range:21,cd:.80},
+ {n:'창',hp:108,atk:16,spd:28,range:26,cd:.84}
+];
+function beats(a,b){return (a==0&&b==3)||(a==3&&b==2)||(a==2&&b==1)||(a==1&&b==0)}
+function mul(a,b){if(beats(a,b))return 1.30;if(beats(b,a))return .80;return 1}
+var heroes=[
+ {id:'buff',name:'지원가',desc:'아군 공격 버프'},
+ {id:'bomb',name:'포격가',desc:'전선 광역 폭격'},
+ {id:'heal',name:'치유사',desc:'전선 병력 회복'},
+ {id:'cc',name:'제어가',desc:'적 전선 둔화'}
+];
+
+var S;
+
+function newState(){
+ return {
+   run:false,pause:false,spd:1,t:0,ended:false,
+   baseHP:1200,
+   units:[],fx:[],
+   aSpawn:0,eSpawn:0,aWave:0,eWave:0,
+   heroI:0,heroT:1.4,buffUntil:0,slowUntil:0,
+   armyAtk:1,armyHp:1,siege:1,support:1,cycleSpeed:1,
+   upgrades:[false,false,false],
+   phase:1,phaseName:'방어선 유지',
+   lullUntil:0,counterUntil:0,
+   tower1:{name:'1차 방어탑',x:225,y:270,hp:620,max:620,alive:true,cd:0},
+   tower2:{name:'2차 방어탑',x:225,y:165,hp:820,max:820,alive:true,cd:0},
+   gate:{name:'성문',x:225,y:73,hp:1500,max:1500,alive:true,cd:0},
+   allyTowers:[
+     {x:145,y:590,cd:0},{x:305,y:590,cd:0}
+   ],
+   boss:null,
+   bossSpawned:false
+ };
+}
+
+function log(s){
+ var el=document.getElementById('log');
+ el.innerHTML='<div>['+fmt(S.t)+'] '+s+'</div>'+el.innerHTML;
+}
+function fmt(t){t=Math.max(0,Math.floor(t));return String(Math.floor(t/60)).padStart(2,'0')+':'+String(t%60).padStart(2,'0')}
+
+function heroUI(){
+ var box=document.getElementById('heroes');box.innerHTML='';
+ for(var i=0;i<heroes.length;i++){
+   (function(i){
+     var h=heroes[i],d=document.createElement('div');d.className='hero';
+     d.innerHTML='<div class="num">'+(i+1)+'</div><div><b>'+h.name+'</b><small>'+h.desc+'</small></div><button>↑</button><button>↓</button>';
+     var bs=d.getElementsByTagName('button');
+     bs[0].onclick=function(){if(S.run&&!S.ended)return;if(i>0){var q=heroes[i-1];heroes[i-1]=heroes[i];heroes[i]=q;heroUI()}};
+     bs[1].onclick=function(){if(S.run&&!S.ended)return;if(i<heroes.length-1){var q=heroes[i+1];heroes[i+1]=heroes[i];heroes[i]=q;heroUI()}};
+     box.appendChild(d);
+   })(i);
+ }
+}
+
+function spawn(team,type,elite){
+ var b=TYPES[type],isA=team==0,phaseScale=1;
+ if(!isA){
+   phaseScale=1+(S.phase-1)*.08;
+   if(S.phase>=4)phaseScale+=.08;
+ }
+ var hp=b.hp*(isA?S.armyHp:phaseScale)*(elite?1.55:1);
+ S.units.push({
+   team:team,type:type,x:laneX+(Math.random()-.5)*56,y:isA?H-68:108,
+   hp:hp,max:hp,atk:b.atk*(isA?S.armyAtk:phaseScale)*(elite?1.25:1),
+   spd:b.spd*(elite?1.05:1),range:b.range,cd:b.cd,at:Math.random()*b.cd,
+   elite:!!elite,r:elite?10:8
+ });
+}
+function spawnPack(team,kind){
+ var isA=team==0,base=(isA?S.aWave++:S.eWave++);
+ if(isA){
+   var arr=[0,0,1,3,2];
+   spawn(0,arr[base%arr.length],false);
+   spawn(0,arr[(base+1)%arr.length],false);
+   spawn(0,arr[(base+2)%arr.length],false);
+   if(S.t>42)spawn(0,arr[(base+3)%arr.length],base%4==0);
+ }else{
+   if(kind=='counter'){
+     for(var k=0;k<6;k++)spawn(1,k%2?2:3,k==0||k==5);
+     log('적 대규모 반격대 출진');
+     return;
+   }
+   if(kind=='gate'){
+     for(var q=0;q<5;q++)spawn(1,[0,1,3,2,1][q],q==0);
+     return;
+   }
+   var arr2=S.phase<=1?[3,0,1,2]:S.phase==2?[2,1,3,0]:[1,3,2,0];
+   var count=S.phase==1?4:3;
+   for(var j=0;j<count;j++)spawn(1,arr2[(base+j)%arr2.length],(base%4==0&&j==0));
+ }
+}
+
+function nearestEnemy(u){
+ var best=null,bd=99999;
+ for(var i=0;i<S.units.length;i++){
+   var v=S.units[i];if(v.team==u.team||v.hp<=0)continue;
+   var d=Math.hypot(v.x-u.x,v.y-u.y);
+   if(d<bd){bd=d;best=v}
+ }
+ return [best,bd];
+}
+function targetStructure(u){
+ if(u.team!=0)return null;
+ if(S.tower1.alive)return S.tower1;
+ if(S.tower2.alive)return S.tower2;
+ if(S.gate.alive)return S.gate;
+ if(S.boss&&S.boss.hp>0)return S.boss;
+ return null;
+}
+function frontline(){
+ var a=[],e=[];
+ for(var i=0;i<S.units.length;i++){
+   if(S.units[i].team==0)a.push(S.units[i].y);else e.push(S.units[i].y);
+ }
+ if(!a.length||!e.length)return H/2;
+ return (Math.min.apply(null,a)+Math.max.apply(null,e))/2;
+}
+
+function damageStructure(u,st,dt){
+ var range=u.type==1?95:26;
+ var d=Math.abs(u.y-st.y);
+ if(d<range+18){
+   var dmg=u.atk*dt*.72*S.siege;
+   st.hp-=dmg;
+   return true;
+ }
+ return false;
+}
+function updateUnits(dt){
+ for(var i=0;i<S.units.length;i++){
+   var u=S.units[i];if(u.hp<=0)continue;u.at-=dt;
+   var r=nearestEnemy(u),t=r[0],d=r[1];
+   var slowed=(u.team==1&&S.t<S.slowUntil)?0.55:1;
+   if(t&&d<u.range+t.r+2){
+     if(u.at<=0){
+       var dmg=u.atk*mul(u.type,t.type);
+       if(u.team==0&&S.t<S.buffUntil)dmg*=1.35*S.support;
+       t.hp-=dmg;
+       u.at=u.cd/(u.team==1&&S.t<S.slowUntil?.70:1);
+     }
+   }else{
+     var st=targetStructure(u);
+     if(st&&damageStructure(u,st,dt)){}
+     else{
+       var dir=u.team==0?-1:1;
+       u.y+=dir*u.spd*slowed*dt;
+       u.x+=(laneX-u.x)*.6*dt;
+     }
+   }
+   if(u.team==1&&u.y>H-42)S.baseHP-=u.atk*.50*dt;
+ }
+ S.units=S.units.filter(function(z){return z.hp>0&&z.y>-30&&z.y<H+30});
+}
+
+function allyTowerFire(t,dt){
+ t.cd-=dt;if(t.cd>0)return;
+ var tar=null,bd=9999;
+ for(var i=0;i<S.units.length;i++){
+   var u=S.units[i];if(u.team!=1)continue;
+   var d=Math.hypot(u.x-t.x,u.y-t.y);
+   if(d<170&&d<bd){bd=d;tar=u}
+ }
+ if(tar){tar.hp-=34;t.cd=.72;S.fx.push({x:t.x,y:t.y,tx:tar.x,ty:tar.y,life:.13,col:C.ally})}
+}
+function enemyStructureFire(st,kind,dt){
+ if(!st.alive)return;
+ st.cd-=dt;if(st.cd>0)return;
+ var range=kind=='gate'?210:175,tar=null,bd=9999;
+ for(var i=0;i<S.units.length;i++){
+   var u=S.units[i];if(u.team!=0)continue;
+   var d=Math.hypot(u.x-st.x,u.y-st.y);
+   if(d<range&&d<bd){bd=d;tar=u}
+ }
+ if(tar){
+   var dmg=kind=='tower1'?52:kind=='tower2'?64:46;
+   tar.hp-=dmg;
+   if(kind=='gate'){
+     for(var j=0;j<S.units.length;j++){
+       var v=S.units[j];if(v.team==0&&Math.hypot(v.x-tar.x,v.y-tar.y)<55)v.hp-=18;
+     }
+   }
+   st.cd=kind=='tower1'?.90:kind=='tower2'?1.15:.95;
+   S.fx.push({x:st.x,y:st.y,tx:tar.x,ty:tar.y,life:.16,col:C.enemy});
+ }
+}
+
+function castHero(){
+ var h=heroes[S.heroI],fy=frontline(),n=0;
+ if(h.id=='buff'){S.buffUntil=S.t+4*S.support;log((S.heroI+1)+'번 지원가 · 진군 버프')}
+ if(h.id=='bomb'){
+   for(var i=0;i<S.units.length;i++){var u=S.units[i];if(u.team==1&&Math.abs(u.y-fy)<100){u.hp-=58*S.support*S.siege;n++}}
+   var st=targetStructure({team:0});
+   if(st&&Math.abs(st.y-fy)<125)st.hp-=40*S.siege;
+   log((S.heroI+1)+'번 포격가 · 전선 폭격 '+n+'기');
+ }
+ if(h.id=='heal'){
+   for(var j=0;j<S.units.length;j++){var a=S.units[j];if(a.team==0&&Math.abs(a.y-fy)<145){a.hp=Math.min(a.max,a.hp+45*S.support);n++}}
+   log((S.heroI+1)+'번 치유사 · '+n+'기 회복');
+ }
+ if(h.id=='cc'){S.slowUntil=S.t+3.2*S.support;log((S.heroI+1)+'번 제어가 · 적 전선 둔화')}
+ S.heroI=(S.heroI+1)%heroes.length;
+ S.heroT=2.6/S.cycleSpeed;
+}
+
+function setPhase(n,name){
+ S.phase=n;S.phaseName=name;
+ document.getElementById('phaseText').innerHTML='PHASE '+n+' · '+name;
+ log('▶ '+name);
+}
+function phaseLogic(){
+ if(S.tower1.alive&&S.tower1.hp<=0){
+   S.tower1.alive=false;S.tower1.hp=0;setPhase(2,'1차 방어탑 파괴 · 적 반격');
+   S.counterUntil=S.t+13;spawnPack(1,'counter');S.eSpawn=5;
+ }
+ if(!S.tower1.alive&&S.tower2.alive&&S.phase==2&&S.t>S.counterUntil){
+   setPhase(3,'2차 방어선 공략');
+ }
+ if(S.tower2.alive&&S.tower2.hp<=0){
+   S.tower2.alive=false;S.tower2.hp=0;setPhase(4,'성문 최후저항');
+   S.eSpawn=1.5;log('성 내부 정예 수비대가 출진합니다.');
+ }
+ if(S.gate.alive&&S.gate.hp<=0){
+   S.gate.alive=false;S.gate.hp=0;setPhase(5,'성문 붕괴 · 최종 보스');
+   spawnBoss();
+ }
+ if(S.boss&&S.boss.hp<=0&&!S.ended){
+   S.boss.hp=0;S.ended=true;S.run=false;document.getElementById('start').innerHTML='승리';
+   log('★★ 최종 보스 격파 · 승리');
+ }
+ if(S.baseHP<=0&&!S.ended){
+   S.baseHP=0;S.ended=true;S.run=false;document.getElementById('start').innerHTML='패배';
+   log('아군 성문 함락 · 패배');
+ }
+}
+function spawnBoss(){
+ if(S.bossSpawned)return;S.bossSpawned=true;
+ S.boss={x:225,y:105,hp:1500,max:1500,atk:72,cd:0,phase:1};
+ for(var i=0;i<5;i++)spawn(1,[0,3,1,2,0][i],i==0);
+ log('보스 등장! 아군 전선을 밀어냅니다.');
+}
+function updateBoss(dt){
+ if(!S.boss||S.boss.hp<=0)return;
+ var b=S.boss;b.cd-=dt;
+ var nearest=null,bd=9999;
+ for(var i=0;i<S.units.length;i++){
+   var u=S.units[i];if(u.team!=0)continue;
+   var d=Math.hypot(u.x-b.x,u.y-b.y);
+   if(d<bd){bd=d;nearest=u}
+ }
+ if(nearest&&bd<95){
+   if(b.cd<=0){
+     for(var j=0;j<S.units.length;j++){
+       var v=S.units[j];if(v.team==0&&Math.hypot(v.x-b.x,v.y-b.y)<105)v.hp-=b.atk*(b.hp<b.max*.35?1.35:1);
+     }
+     b.cd=1.55;log('보스 광역 강공격');
+   }
+ }else{
+   b.y+=23*dt;
+ }
+ if(nearest&&bd<130){
+   nearest.hp-=10*dt;
+ }
+ if(b.hp<b.max*.65&&b.phase==1){b.phase=2;spawnPack(1,'counter');log('보스 2페이즈 · 증원 소환')}
+ if(b.hp<b.max*.30&&b.phase==2){b.phase=3;spawnPack(1,'gate');log('보스 광폭화 · 최후의 수비대')}
+ if(b.y>H-55){S.baseHP-=34*dt}
+}
+
+function enemySpawnLogic(dt){
+ S.eSpawn-=dt;S.aSpawn-=dt;
+ if(S.aSpawn<=0){spawnPack(0);S.aSpawn=4.3}
+ if(S.eSpawn>0)return;
+
+ if(S.phase==1){
+   // wave / lull rhythm
+   var cycle=S.t%22;
+   if(cycle<15){spawnPack(1);S.eSpawn=4.0}else{S.eSpawn=2.0}
+ }else if(S.phase==2){
+   if(S.t<S.counterUntil){spawnPack(1,'counter');S.eSpawn=5.5}else{S.eSpawn=3}
+ }else if(S.phase==3){
+   var cyc=S.t%20;if(cyc<13){spawnPack(1);S.eSpawn=4.6}else{S.eSpawn=2.5}
+ }else if(S.phase==4){
+   spawnPack(1,'gate');S.eSpawn=3.8;
+ }else if(S.phase==5){
+   spawnPack(1);S.eSpawn=5.8;
+ }
+}
+
+function maybeUpgrade(){
+ var marks=[22,50,82];
+ for(var i=0;i<marks.length;i++){
+   if(S.t>marks[i]&&!S.upgrades[i]){
+     S.upgrades[i]=true;S.pause=true;document.getElementById('overlay').style.display='flex';break;
+   }
+ }
+}
+function applyUpgrade(k){
+ if(k=='army'){S.armyAtk*=1.20;S.armyHp*=1.18;log('강화 · 병력 집중 훈련')}
+ if(k=='siege'){S.siege*=1.35;log('강화 · 공성 특화')}
+ if(k=='support'){S.support*=1.25;S.cycleSpeed*=1.12;log('강화 · 전술 지원')}
+ document.getElementById('overlay').style.display='none';S.pause=false;
+}
+
+function update(dt){
+ if(!S.run||S.pause||S.ended)return;
+ dt*=S.spd;S.t+=dt;S.heroT-=dt;
+ enemySpawnLogic(dt);
+ if(S.heroT<=0)castHero();
+ updateUnits(dt);
+ for(var i=0;i<S.allyTowers.length;i++)allyTowerFire(S.allyTowers[i],dt);
+ enemyStructureFire(S.tower1,'tower1',dt);
+ enemyStructureFire(S.tower2,'tower2',dt);
+ enemyStructureFire(S.gate,'gate',dt);
+ updateBoss(dt);
+ for(var f=0;f<S.fx.length;f++)S.fx[f].life-=dt;
+ S.fx=S.fx.filter(function(z){return z.life>0});
+ phaseLogic();maybeUpgrade();hud();
+}
+
+function hpbar(x,y,w,h,p,col){
+ g.fillStyle='#0c1118';g.fillRect(x,y,w,h);g.fillStyle=col;g.fillRect(x,y,w*Math.max(0,Math.min(1,p)),h)
+}
+function structure(st,label,col){
+ if(!st.alive)return;
+ g.fillStyle=col;g.fillRect(st.x-28,st.y-16,56,32);
+ g.fillStyle=C.text;g.font='bold 10px -apple-system';g.textAlign='center';g.fillText(label,st.x,st.y+4);
+ hpbar(st.x-31,st.y-25,62,5,st.hp/st.max,col);
+}
+function drawUnit(u){
+ var cols=[C.sword,C.archer,C.cavalry,C.spear],r=u.r;
+ g.fillStyle=cols[u.type];g.strokeStyle=u.team==0?C.ally:C.enemy;g.lineWidth=2;
+ g.beginPath();
+ if(u.type==1)g.rect(u.x-r,u.y-r,r*2,r*2);
+ else if(u.type==2){g.moveTo(u.x,u.y-r);g.lineTo(u.x+r,u.y+r);g.lineTo(u.x-r,u.y+r);g.closePath()}
+ else {g.arc(u.x,u.y,r,0,Math.PI*2)}
+ g.fill();g.stroke();
+ hpbar(u.x-10,u.y-r-6,20,3,u.hp/u.max,u.team==0?C.ally:C.enemy);
+ if(u.elite){g.fillStyle=C.gold;g.fillRect(u.x-2,u.y-2,4,4)}
+}
+function draw(){
+ g.clearRect(0,0,W,H);
+ g.fillStyle=C.road;g.fillRect(78,0,W-156,H);
+
+ // zones
+ g.fillStyle='rgba(255,118,133,.07)';g.fillRect(78,0,W-156,315);
+ g.fillStyle='rgba(101,215,239,.05)';g.fillRect(78,520,W-156,180);
+
+ // bases
+ g.fillStyle='#732b36';g.fillRect(128,20,W-256,34);
+ g.fillStyle='#245f6e';g.fillRect(128,H-54,W-256,34);
+ g.fillStyle=C.text;g.font='bold 11px -apple-system';g.textAlign='center';
+ g.fillText('적 성채',W/2,42);g.fillText('아군 성 · HP '+Math.ceil(S.baseHP),W/2,H-31);
+
+ // enemy structures
+ structure(S.gate,'성문','#94414c');
+ structure(S.tower2,'Ⅱ','#a34c55');
+ structure(S.tower1,'Ⅰ','#a34c55');
+
+ // ally defense towers
+ for(var i=0;i<S.allyTowers.length;i++){
+   var t=S.allyTowers[i];g.fillStyle='#347c8b';g.fillRect(t.x-16,t.y-16,32,32);
+   g.fillStyle='#dce6f2';g.fillRect(t.x-5,t.y-23,10,8);
+ }
+
+ // frontline
+ var fy=frontline();
+ g.strokeStyle=C.gold;g.setLineDash([7,5]);g.lineWidth=1.7;g.beginPath();g.moveTo(90,fy);g.lineTo(W-90,fy);g.stroke();g.setLineDash([]);
+ g.fillStyle=C.gold;g.font='bold 9px -apple-system';g.fillText('전선',W-108,fy-5);
+
+ // boss
+ if(S.boss&&S.boss.hp>0){
+   g.fillStyle=C.boss;g.strokeStyle='#ff6f61';g.lineWidth=3;g.beginPath();g.arc(S.boss.x,S.boss.y,17,0,Math.PI*2);g.fill();g.stroke();
+   hpbar(S.boss.x-36,S.boss.y-28,72,6,S.boss.hp/S.boss.max,C.boss);
+   g.fillStyle=C.text;g.font='bold 9px -apple-system';g.fillText('BOSS',S.boss.x,S.boss.y+3);
+ }
+
+ for(var u=0;u<S.units.length;u++)drawUnit(S.units[u]);
+
+ // projectile lines
+ for(var p=0;p<S.fx.length;p++){
+   var z=S.fx[p];g.strokeStyle=z.col;g.lineWidth=2;g.beginPath();g.moveTo(z.x,z.y);g.lineTo(z.tx,z.ty);g.stroke();
+ }
+
+ // hero cycle strip
+ var yy=H-92;
+ for(var h=0;h<heroes.length;h++){
+   g.fillStyle=(h==S.heroI&&S.run)?'#3d526f':'#202b3a';
+   g.fillRect(18+h*105,yy-14,94,28);
+   g.fillStyle=C.text;g.font='10px -apple-system';g.fillText((h+1)+'.'+heroes[h].name,65+h*105,yy+3);
+ }
+}
+
+function hud(){document.getElementById('clock').innerHTML=fmt(S.t)}
+
+function reset(){
+ S=newState();document.getElementById('overlay').style.display='none';
+ document.getElementById('start').innerHTML='시작';document.getElementById('pause').innerHTML='일시정지';document.getElementById('speed').innerHTML='1×';
+ document.getElementById('phaseText').innerHTML='PHASE 1 · 방어선 유지';document.getElementById('log').innerHTML='';
+ hud();draw();
+}
+document.getElementById('start').onclick=function(){if(S.ended)return;S.run=true;S.pause=false;this.innerHTML='진행 중';log('전투 시작 · 적 1차 공세')};
+document.getElementById('pause').onclick=function(){if(!S.run)return;S.pause=!S.pause;this.innerHTML=S.pause?'계속':'일시정지'};
+document.getElementById('speed').onclick=function(){S.spd=S.spd==1?2:S.spd==2?4:1;this.innerHTML=S.spd+'×'};
+document.getElementById('reset').onclick=reset;
+var ch=document.querySelectorAll('.choice');for(var ci=0;ci<ch.length;ci++)ch[ci].onclick=function(){applyUpgrade(this.getAttribute('data-up'))};
+
+var last=Date.now();
+function loop(){var now=Date.now(),dt=Math.min((now-last)/1000,.033);last=now;update(dt);draw();requestAnimationFrame(loop)}
+heroUI();reset();loop();
+})();
+</script>
+</body>
+</html>
